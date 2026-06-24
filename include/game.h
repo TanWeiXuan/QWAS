@@ -27,6 +27,7 @@ struct Game {
     LandingPad pad;       // destination pad
     Camera3D   camera;
     float      deadTimer;        // counts down; press R only when <= 0
+    float      winTimer;         // counts up from 0 on WIN entry (drives celebration)
     float      bestScore;        // best progress % this session
     int        settingsSelectedIdx;
 

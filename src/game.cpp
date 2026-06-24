@@ -27,12 +27,14 @@ void Game::Init() {
     state = GameState::MENU;
     drone.Init({0, DRONE_REST_Y, 0});
     deadTimer = 0;
+    winTimer  = 0;
     settingsSelectedIdx = 0;
 }
 
 void Game::Reset() {
     drone.Init({0, DRONE_REST_Y, 0});
     deadTimer = 0;
+    winTimer  = 0;
 
     camera.position = {0, 4, 8};
     camera.target   = {0, DRONE_REST_Y, 0};
@@ -136,7 +138,7 @@ void Game::UpdateDead(float dt) {
 }
 
 void Game::UpdateWin(float dt) {
-    (void)dt;
+    winTimer += dt;
     if (IsKeyPressed(KEY_R)) {
         Reset();
         state = GameState::PLAYING;
@@ -185,7 +187,26 @@ void Game::CheckCollisions() {
         return;  // never crash while on the starting pad
     }
 
-    // --- Normal crash checks (only when away from starting pad) ---
+    // --- Destination pad: ground reaction + win check (before crash checks) ---
+    bool overPad = fabsf(drone.position.x - pad.position.x) < pad.halfSize &&
+                   fabsf(drone.position.z - pad.position.z) < pad.halfSize;
+    if (overPad) {
+        if (drone.position.y < DRONE_REST_Y) {
+            drone.position.y = DRONE_REST_Y;
+            if (drone.velocity.y < 0.0f) drone.velocity.y = 0.0f;
+            drone.angularVel.x *= 0.85f;
+            drone.angularVel.z *= 0.85f;
+        }
+        float speed = Vector3Length(drone.velocity);
+        bool gentle = drone.position.y < 0.5f && speed < 2.0f && drone.GetTiltAngle() < 20.0f;
+        if (gentle) {
+            state     = GameState::WIN;
+            bestScore = 100.0f;
+        }
+        return;
+    }
+
+    // --- Normal crash checks (only when away from both pads) ---
     for (int i = 0; i < ROTOR_COUNT; i++) {
         if (drone.GetRotorWorldPos((RotorID)i).y < 0.0f) {
             drone.alive = false;
@@ -207,17 +228,6 @@ void Game::CheckCollisions() {
         state       = GameState::DEAD;
         deadTimer   = 1.5f;
         return;
-    }
-
-    // --- Win: gentle landing on destination pad ---
-    bool overPad = fabsf(drone.position.x - pad.position.x) < pad.halfSize &&
-                   fabsf(drone.position.z - pad.position.z) < pad.halfSize;
-    float speed  = Vector3Length(drone.velocity);
-    bool gentle  = drone.position.y < 0.5f && speed < 2.0f && drone.GetTiltAngle() < 20.0f;
-
-    if (overPad && gentle) {
-        state     = GameState::WIN;
-        bestScore = 100.0f;
     }
 }
 
@@ -373,10 +383,25 @@ void Game::DrawDead() const {
 void Game::DrawWin() const {
     DrawRectangle(0, 0, screenWidth, screenHeight, {0, 60, 0, 150});
 
-    DrawCenteredText("LANDED!",             screenHeight / 2 - 100, 80, GREEN);
-    DrawCenteredText("Progress:  100%",     screenHeight / 2 - 10,  30, WHITE);
-    DrawCenteredText("Perfect landing!",    screenHeight / 2 + 30,  24, GOLD);
-    DrawCenteredText("Press R to fly again", screenHeight / 2 + 70, 24, LIGHTGRAY);
+    // Expanding celebration rings in motor colors, staggered 0.4s apart
+    const Color ringColors[4] = {RED, BLUE, GREEN, YELLOW};
+    const float period = 1.6f;
+    int cx = screenWidth / 2, cy = screenHeight / 2;
+    for (int w = 0; w < 4; w++) {
+        float t      = fmod(winTimer + w * (period / 4.0f), period);
+        float radius = t * 420.0f;
+        float alpha  = fmaxf(0.0f, 1.0f - t / period);
+        Color c      = Fade(ringColors[w], alpha * 0.85f);
+        DrawCircleLines(cx, cy, radius,        c);
+        DrawCircleLines(cx, cy, radius - 5.0f, Fade(ringColors[w], alpha * 0.4f));
+    }
+
+    // Pulsing title
+    int titleSize = (int)(80 * (1.0f + 0.07f * sinf(winTimer * 5.0f)));
+    DrawCenteredText("LANDED!",              screenHeight / 2 - 100, titleSize, GREEN);
+    DrawCenteredText("Progress:  100%",      screenHeight / 2 - 10,  30, WHITE);
+    DrawCenteredText("Perfect landing!",     screenHeight / 2 + 30,  24, GOLD);
+    DrawCenteredText("Press R to fly again", screenHeight / 2 + 70,  24, LIGHTGRAY);
 
     drone.DrawHUDBars(screenWidth, screenHeight);
 }
@@ -390,9 +415,9 @@ void Game::DrawSettings() const {
         { "Thrust Ramp Up",  "N/s",    &THRUST_RAMP_UP,   1.0f,  20.0f },
         { "Thrust Ramp Down","N/s",    &THRUST_RAMP_DOWN, 1.0f,  30.0f },
         { "Arm Length",      "m",      &ARM_LENGTH,       0.05f, 1.0f  },
-        { "Inertia Pitch",   "kg\xb7m\xb2",&I_PITCH,     0.001f,0.05f },
-        { "Inertia Yaw",     "kg\xb7m\xb2",&I_YAW,       0.001f,0.05f },
-        { "Inertia Roll",    "kg\xb7m\xb2",&I_ROLL,       0.001f,0.05f },
+        { "Inertia Pitch",   "kg\xb7m\xb2",&I_PITCH,     0.01f, 1.0f  },
+        { "Inertia Yaw",     "kg\xb7m\xb2",&I_YAW,       0.01f, 1.0f  },
+        { "Inertia Roll",    "kg\xb7m\xb2",&I_ROLL,       0.01f, 1.0f  },
         { "Linear Drag",     "/s",     &LIN_DRAG,         0.0f,  3.0f  },
         { "Angular Drag",    "/s",     &ANG_DRAG,         0.0f,  10.0f },
         { "Yaw Coeff",       "",       &K_YAW,            0.001f,0.2f  },
