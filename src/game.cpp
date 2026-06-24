@@ -278,7 +278,8 @@ void Game::DrawWorld() const {
     // Reference trees along path at x=±4, every 5m forward
     for (int i = 1; i <= 5; i++) {
         float z = -i * 4.5f;
-        for (float x : (float[]){-4.0f, 4.0f}) {
+        const float treeXs[] = {-4.0f, 4.0f};
+        for (float x : treeXs) {
             DrawCylinder({x, 0, z}, 0.15f, 0.0f, 2.0f, 6, BROWN);
             DrawSphere({x, 2.2f, z}, 0.65f, DARKGREEN);
         }
