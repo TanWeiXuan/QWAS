@@ -1,5 +1,6 @@
 # QWAS — Quadrotor With Awkward Strokes
 
+![App Screenshot](doc/qwas.png)
 A 3D drone physics game inspired by [QWOP](https://www.foddy.net/Athletics.html). Instead of controlling a runner's legs, you control a quadrotor's four propellers individually. Coordinating four independent thrust sources to achieve stable flight is harder than it sounds.
 
 ## Gameplay
