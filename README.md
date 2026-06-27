@@ -4,6 +4,8 @@
 
 QWAS is a small 3D drone physics game inspired by QWOP. Instead of controlling a runner's legs, you control a quadrotor's four propellers independently. Coordinating four thrust sources into stable flight is harder than it sounds.
 
+[Try it here now!](https://chiaxr.github.io/QWAS/)
+
 ## Gameplay
 
 Hold a motor input to ramp up that motor's thrust; release it and the thrust drops quickly.
