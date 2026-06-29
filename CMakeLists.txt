@@ -92,4 +92,11 @@ if(QWAS_BUILD_WEB)
         "-sGL_ENABLE_GET_PROC_ADDRESS=1"
         "--shell-file=${CMAKE_CURRENT_LIST_DIR}/web/emscripten_shell.html"
     )
+
+    add_custom_command(TARGET qwas_web POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_LIST_DIR}/doc/qwas.png"
+            "${QWAS_WEB_DIST_DIR}/qwas.png"
+        COMMENT "Copying social preview image"
+    )
 endif()
