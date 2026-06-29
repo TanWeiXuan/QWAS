@@ -66,6 +66,30 @@ void DrawRotorTouchZone(RotorID id, const Drone& drone, int screenW, int screenH
              fontSize,
              Fade(color, alpha * 0.90f));
 }
+
+const char* GetCrashTitle(CrashReason reason) {
+    switch (reason) {
+        case CrashReason::ROTOR_STRIKE:   return "ROTOR STRIKE!";
+        case CrashReason::GROUND_IMPACT:  return "GROUND IMPACT!";
+        case CrashReason::TOO_HIGH:       return "TOO HIGH!";
+        case CrashReason::OUT_OF_BOUNDS:  return "OUT OF BOUNDS!";
+        case CrashReason::NONE:           return "CRASHED!";
+    }
+
+    return "CRASHED!";
+}
+
+const char* GetCrashHint(CrashReason reason) {
+    switch (reason) {
+        case CrashReason::ROTOR_STRIKE:   return "A rotor hit the ground.";
+        case CrashReason::GROUND_IMPACT:  return "The drone body hit the ground.";
+        case CrashReason::TOO_HIGH:       return "You flew above the safe altitude.";
+        case CrashReason::OUT_OF_BOUNDS:  return "You left the flight area.";
+        case CrashReason::NONE:           return "";
+    }
+
+    return "";
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -91,6 +115,7 @@ void Game::Init() {
     camera.target   = {0, DRONE_REST_Y, 0};
 
     state = GameState::MENU;
+    crashReason = CrashReason::NONE;
     drone.Init({0, DRONE_REST_Y, 0});
     deadTimer = 0;
     winTimer  = 0;
@@ -104,6 +129,7 @@ void Game::Init() {
 
 void Game::Reset() {
     drone.Init({0, DRONE_REST_Y, 0});
+    crashReason = CrashReason::NONE;
     deadTimer = 0;
     winTimer  = 0;
     touchGuideAlpha = 1.0f;
@@ -324,6 +350,7 @@ void Game::CheckCollisions() {
     for (int i = 0; i < ROTOR_COUNT; i++) {
         if (drone.GetRotorWorldPos((RotorID)i).y < 0.0f) {
             drone.alive = false;
+            crashReason = CrashReason::ROTOR_STRIKE;
             state       = GameState::DEAD;
             deadTimer   = 1.5f;
             return;
@@ -332,13 +359,23 @@ void Game::CheckCollisions() {
 
     if (drone.position.y < 0.0f) {
         drone.alive = false;
+        crashReason = CrashReason::GROUND_IMPACT;
         state       = GameState::DEAD;
         deadTimer   = 1.5f;
         return;
     }
 
-    if (drone.position.y > 15.0f || fabsf(drone.position.x) > 20.0f) {
+    if (drone.position.y > 15.0f) {
         drone.alive = false;
+        crashReason = CrashReason::TOO_HIGH;
+        state       = GameState::DEAD;
+        deadTimer   = 1.5f;
+        return;
+    }
+
+    if (fabsf(drone.position.x) > 20.0f) {
+        drone.alive = false;
+        crashReason = CrashReason::OUT_OF_BOUNDS;
         state       = GameState::DEAD;
         deadTimer   = 1.5f;
         return;
@@ -498,7 +535,8 @@ void Game::DrawDead() const {
     if (deadTimer <= 0.0f) {
         DrawRectangle(0, 0, screenWidth, screenHeight, {0, 0, 0, 120});
 
-        DrawCenteredText("CRASHED!", screenHeight / 2 - 80, 60, RED);
+        DrawCenteredText(GetCrashTitle(crashReason), screenHeight / 2 - 100, 60, RED);
+        DrawCenteredText(GetCrashHint(crashReason), screenHeight / 2 - 38, 24, LIGHTGRAY);
 
         float progress = fminf(drone.distanceTraveled / fabsf(PAD_WORLD_Z) * 100.0f, 100.0f);
         DrawCenteredText(TextFormat("Progress: %.0f%%", progress), screenHeight / 2, 30, WHITE);

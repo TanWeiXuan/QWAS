@@ -12,6 +12,7 @@ constexpr float PAD_TOP_Y    = 0.10f;   // top surface of any pad (cube: center 
 constexpr float DRONE_REST_Y = 0.13f;   // drone center when resting on a pad (PAD_TOP_Y + body half-height 0.03)
 
 enum class GameState { MENU, PLAYING, DEAD, WIN, SETTINGS };
+enum class CrashReason { NONE, ROTOR_STRIKE, GROUND_IMPACT, TOO_HIGH, OUT_OF_BOUNDS };
 
 struct LandingPad {
     Vector3 position;  // center
@@ -22,6 +23,7 @@ struct Game {
     int        screenWidth;
     int        screenHeight;
     GameState  state;
+    CrashReason crashReason;
     Drone      drone;
     LandingPad startPad;  // spawn pad; ground contact here is never a crash
     LandingPad pad;       // destination pad
