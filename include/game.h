@@ -62,7 +62,7 @@ private:
     void ActivateMenuButton(int idx);
 
     void UpdateCamera(float dt);
-    void CheckCollisions();
+    void CheckGameStatus();
     void DrawWorld() const;
     void DrawOverlay() const;
     bool ConsumeCompletedTap();

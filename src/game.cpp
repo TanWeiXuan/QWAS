@@ -325,7 +325,7 @@ void Game::UpdatePlaying(float dt) {
 
     drone.Update(dt);
     UpdateCamera(dt);
-    CheckCollisions();
+    CheckGameStatus();
 
     float progress = fminf(drone.distanceTraveled / fabsf(PAD_WORLD_Z) * 100.0f, 100.0f);
     if (progress > bestScore) bestScore = progress;
@@ -465,7 +465,7 @@ void Game::UpdateCamera(float dt) {
     camera.up = {0, 1, 0};
 }
 
-void Game::CheckCollisions() {
+void Game::CheckGameStatus() {
     // --- Starting pad: ground contact here is never a crash ---
     bool onStartPad = fabsf(drone.position.x - startPad.position.x) < startPad.halfSize &&
                       fabsf(drone.position.z - startPad.position.z) < startPad.halfSize;
@@ -486,21 +486,22 @@ void Game::CheckCollisions() {
     }
 
     // --- Destination pad: ground reaction + win check (before crash checks) ---
-    bool overPad = fabsf(drone.position.x - pad.position.x) < pad.halfSize &&
-                   fabsf(drone.position.z - pad.position.z) < pad.halfSize;
-    if (overPad) {
-        if (drone.position.y < DRONE_REST_Y) {
-            drone.position.y = DRONE_REST_Y;
-            if (drone.velocity.y < 0.0f) drone.velocity.y = 0.0f;
-            drone.angularVel.x *= 0.85f;
-            drone.angularVel.z *= 0.85f;
-        }
+    bool reachedPad = fabsf(drone.position.x - pad.position.x) < pad.halfSize &&
+                   fabsf(drone.position.z - pad.position.z) < pad.halfSize &&
+                   drone.position.y < DRONE_REST_Y + 0.5f;
+    if (reachedPad) {
+        state     = GameState::WIN;
+        bestScore = 99.999f;
+
+        // Perfect win - only if drone lands gently and level
+        constexpr float perfectLandSpeed = 2.0f;
+        constexpr float perfectLandAngle = 20.0f;
         float speed = Vector3Length(drone.velocity);
-        bool gentle = drone.position.y < 0.5f && speed < 2.0f && drone.GetTiltAngle() < 20.0f;
-        if (gentle) {
-            state     = GameState::WIN;
+        bool perfectWin = speed < perfectLandSpeed && drone.GetTiltAngle() < perfectLandAngle;
+        if (perfectWin) {
             bestScore = 100.0f;
         }
+
         return;
     }
 
@@ -712,9 +713,18 @@ void Game::DrawWin() const {
 
     // Pulsing title
     int titleSize = (int)(80 * (1.0f + 0.07f * sinf(winTimer * 5.0f)));
-    DrawCenteredText("LANDED!",          sh / 2 - 100, titleSize, GREEN);
-    DrawCenteredText("Progress:  100%",  sh / 2 - 10,  30, WHITE);
-    DrawCenteredText("Perfect landing!", sh / 2 + 30,  24, GOLD);
+    if (bestScore < 100.0f)
+    {
+        DrawCenteredText("\"LANDED\"",              sh / 2 - 100, titleSize, GREEN);
+        DrawCenteredText("Progress:  99.999%",  sh / 2 - 10,  30, WHITE);
+        DrawCenteredText("You made it to the end.",    sh / 2 + 30,  24, GOLD);
+    }
+    else
+    {
+        DrawCenteredText("LANDED",              sh / 2 - 100, titleSize, GREEN);
+        DrawCenteredText("Progress:  100%",  sh / 2 - 10,  30, WHITE);
+        DrawCenteredText("Perfect landing!",    sh / 2 + 30,  24, GOLD);
+    }
 
     int btnY = sh / 2 + 90;
     DrawMenuButton("FLY AGAIN",       GetEndScreenButtonRect(0, sw, btnY), endScreenSelectedIdx == 0);
