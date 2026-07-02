@@ -144,10 +144,32 @@ const SettingsEntry kSettingsEntries[SETTINGS_COUNT] = {
     { "Yaw Coeff",        "",            &K_YAW,            0.01f, 0.2f,  0.01f, K_YAW_DEFAULT            },
 };
 
+// Shared modal-dialog chrome: full-screen dim + panel fill/border, and a
+// BACK button + footer hint reserved in a fixed-height block at the bottom
+// of every panel, so Settings/Instructions/any future dialog look and
+// behave identically.
+constexpr int DIALOG_BACK_BTN_W            = 220;
+constexpr int DIALOG_BACK_BTN_H            = 52;
+constexpr int DIALOG_BACK_BTN_BOTTOM_MARGIN = 20;
+constexpr int DIALOG_FOOTER_GAP            = 24;  // gap between footer hint and button top
+constexpr int DIALOG_FOOTER_BLOCK_H        = DIALOG_BACK_BTN_BOTTOM_MARGIN + DIALOG_BACK_BTN_H + DIALOG_FOOTER_GAP;
+constexpr int DIALOG_TITLE_SIZE            = 28;
+constexpr int DIALOG_TITLE_TOP_PAD         = 14;
+
+Rectangle GetDialogBackButtonRect(int bx, int by, int bw, int bh) {
+    int bx2 = bx + (bw - DIALOG_BACK_BTN_W) / 2;
+    int by2 = by + bh - DIALOG_BACK_BTN_BOTTOM_MARGIN - DIALOG_BACK_BTN_H;
+    return { (float)bx2, (float)by2, (float)DIALOG_BACK_BTN_W, (float)DIALOG_BACK_BTN_H };
+}
+
+int GetDialogFooterY(int by, int bh) {
+    return by + bh - DIALOG_FOOTER_BLOCK_H;
+}
+
 struct SettingsLayout { int bx, by, bw, bh, sliderX, sliderW; };
 
 SettingsLayout GetSettingsLayout(int screenW, int screenH) {
-    int bw = 820, bh = 60 + SETTINGS_COUNT * SETTINGS_ROW_H + 50;
+    int bw = 820, bh = 60 + SETTINGS_COUNT * SETTINGS_ROW_H + DIALOG_FOOTER_BLOCK_H + 20;
     int bx = (screenW - bw) / 2;
     int by = (screenH - bh) / 2;
     return { bx, by, bw, bh, bx + 290, 300 };
@@ -163,11 +185,13 @@ Rectangle GetSettingsSliderHitRect(const SettingsLayout& L, int idx) {
     return { (float)L.sliderX, (float)ry, (float)L.sliderW, (float)SETTINGS_ROW_H };
 }
 
-Rectangle GetSettingsBackButtonRect(const SettingsLayout& L) {
-    const int btnW = 220, btnH = 52;
-    int bx2 = L.bx + (L.bw - btnW) / 2;
-    int by2 = L.by + L.bh + 24;
-    return { (float)bx2, (float)by2, (float)btnW, (float)btnH };
+struct InstructionsLayout { int bx, by, bw, bh; };
+
+InstructionsLayout GetInstructionsLayout(int screenW, int screenH) {
+    const int bw = 760, bh = 680;
+    int bx = (screenW - bw) / 2;
+    int by = (screenH - bh) / 2;
+    return { bx, by, bw, bh };
 }
 }  // namespace
 
@@ -353,7 +377,7 @@ void Game::UpdateSettings() {
 
     // Back button (discrete — skip while a slider drag is in progress)
     if (!draggingSlider) {
-        Rectangle backRect = GetSettingsBackButtonRect(L);
+        Rectangle backRect = GetDialogBackButtonRect(L.bx, L.by, L.bw, L.bh);
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(), backRect)) {
             exitToMenu(); return;
         }
@@ -369,7 +393,16 @@ void Game::UpdateInstructions() {
         state = GameState::MENU;
         return;
     }
-    if (ConsumeCompletedTap()) {
+
+    InstructionsLayout L = GetInstructionsLayout(GetScreenWidth(), GetScreenHeight());
+    Rectangle backRect = GetDialogBackButtonRect(L.bx, L.by, L.bw, L.bh);
+
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(), backRect)) {
+        menuSelectedIdx = 2;
+        state = GameState::MENU;
+        return;
+    }
+    if (ConsumeCompletedTap() && CheckCollisionPointRec(tapStart, backRect)) {
         menuSelectedIdx = 2;
         state = GameState::MENU;
     }
@@ -691,6 +724,24 @@ static void DrawCenteredText(const char* text, int y, int fontSize, Color color)
     DrawText(text, (GetScreenWidth() - w) / 2, y, fontSize, color);
 }
 
+// Shared chrome for boxed modal dialogs (Settings, Instructions): dimmed
+// backdrop, filled/bordered panel, and title, so both screens look alike.
+static void DrawDialogPanel(int bx, int by, int bw, int bh, int screenW, int screenH, const char* title) {
+    DrawRectangle(0, 0, screenW, screenH, {0, 0, 0, 180});
+    DrawRectangle(bx, by, bw, bh, {10, 10, 10, 220});
+    DrawRectangleLinesEx({(float)bx, (float)by, (float)bw, (float)bh}, 2.0f, {70, 70, 70, 255});
+    DrawCenteredText(title, by + DIALOG_TITLE_TOP_PAD, DIALOG_TITLE_SIZE, WHITE);
+}
+
+// Shared footer for boxed modal dialogs: hint text + BACK button, both
+// positioned in the fixed-height block reserved by DIALOG_FOOTER_BLOCK_H.
+static void DrawDialogFooter(int bx, int by, int bw, int bh, const char* hint) {
+    DrawCenteredText(hint, GetDialogFooterY(by, bh), 16, {180, 180, 180, 255});
+    Rectangle backRect = GetDialogBackButtonRect(bx, by, bw, bh);
+    bool backHovered = CheckCollisionPointRec(GetMousePosition(), backRect);
+    DrawMenuButton("BACK", backRect, backHovered);
+}
+
 void Game::DrawMenu() const {
     int sw = GetScreenWidth(), sh = GetScreenHeight();
 
@@ -812,9 +863,7 @@ void Game::DrawWin() const {
 
 void Game::DrawSettings() const {
     SettingsLayout L = GetSettingsLayout(screenWidth, screenHeight);
-    DrawRectangle(L.bx, L.by, L.bw, L.bh, {0, 0, 0, 180});
-
-    DrawCenteredText("PHYSICS SETTINGS", L.by + 14, 28, WHITE);
+    DrawDialogPanel(L.bx, L.by, L.bw, L.bh, screenWidth, screenHeight, "PHYSICS SETTINGS");
 
     int labelX = L.bx + 20;
     int valueX = L.bx + L.bw - 120;
@@ -848,24 +897,15 @@ void Game::DrawSettings() const {
         DrawText(TextFormat("%.3g %s", *e.val, e.unit), valueX, ry + 8, 17, textCol);
     }
 
-    DrawCenteredText("Drag sliders or Up/Down + Left/Right to adjust   R Reset defaults   Back or Backspace/Escape to exit",
-                     L.by + L.bh - 26, 16, {180, 180, 180, 255});
-
-    Rectangle backRect = GetSettingsBackButtonRect(L);
-    bool backHovered = CheckCollisionPointRec(GetMousePosition(), backRect);
-    DrawMenuButton("BACK", backRect, backHovered);
+    DrawDialogFooter(L.bx, L.by, L.bw, L.bh,
+                     "Drag sliders or Up/Down + Left/Right to adjust   R Reset defaults   Back or Backspace/Escape to exit");
 }
 
 void Game::DrawInstructions() const {
     int sw = GetScreenWidth(), sh = GetScreenHeight();
-    DrawRectangle(0, 0, sw, sh, {0, 0, 0, 150});
-
-    const int bw = 760, bh = 600;
-    const int bx = (sw - bw) / 2, by = (sh - bh) / 2;
-    DrawRectangle(bx, by, bw, bh, {10, 10, 10, 220});
-    DrawRectangleLinesEx({(float)bx, (float)by, (float)bw, (float)bh}, 2.0f, {70, 70, 70, 255});
-
-    DrawCenteredText("INSTRUCTIONS", by + 18, 30, WHITE);
+    InstructionsLayout L = GetInstructionsLayout(sw, sh);
+    const int bx = L.bx, by = L.by, bw = L.bw, bh = L.bh;
+    DrawDialogPanel(bx, by, bw, bh, sw, sh, "INSTRUCTIONS");
 
     int lx = bx + 40;
     int y  = by + 65;
@@ -913,6 +953,5 @@ void Game::DrawInstructions() const {
     y += 20;
     DrawText("Use Settings to adjust physics constants.", lx, y, 17, WHITE);
 
-    DrawCenteredText("Backspace / Escape or tap to return",
-                     by + bh - 26, 15, {120, 120, 120, 255});
+    DrawDialogFooter(bx, by, bw, bh, "Back or Backspace/Escape to exit");
 }
