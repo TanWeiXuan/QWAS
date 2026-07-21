@@ -308,17 +308,9 @@ void Game::UpdateMenu() {
         return;
     }
 
-    // Activate via mouse click
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-        for (int i = 0; i < MENU_COUNT; i++) {
-            if (CheckCollisionPointRec(mp, GetMenuButtonRect(i, sw, sh))) {
-                ActivateMenuButton(i);
-                return;
-            }
-        }
-    }
-
-    // Activate via touch tap
+    // Use one completed-tap path for mouse and touch. Handling mouse-down
+    // separately can activate a toggle again when raylib reports the same
+    // interaction as a tap gesture on release.
     if (ConsumeCompletedTap()) {
         for (int i = 0; i < MENU_COUNT; i++) {
             if (CheckCollisionPointRec(tapStart, GetMenuButtonRect(i, sw, sh))) {
