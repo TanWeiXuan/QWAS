@@ -26,6 +26,12 @@ Goal: fly from the green starting pad to the orange landing pad 25 meters ahead.
 
 Crash condition: any rotor hits the ground outside the starting or landing pad.
 
+## Easy Mode
+
+The main menu includes an optional `EASY MODE` toggle. It is off whenever the application starts and is preserved only across retries in that application session. Easy Mode keeps the player in control: it adds a below-hover sink top-up plus bounded pitch/roll stabilization, never goal navigation, horizontal-position control, or learned collective lift.
+
+The default actor is dependency-free baked C++ data for both native and web builds. Training, evaluation, portable weight export, native development overrides, measured results, and the exact observation/reward specification are documented in [doc/stability_assist.md](doc/stability_assist.md).
+
 ## Controls
 
 | Input | Action |
@@ -55,6 +61,12 @@ Run the native executable:
 
 ```bash
 ./build/QWAS
+```
+
+Optionally load compatible development weights without recompiling (the baked actor remains the fallback):
+
+```bash
+./build/QWAS --assist-weights models/stability_assist.qwasmlp
 ```
 
 On Windows with Visual Studio generators, the executable is typically under:
@@ -107,12 +119,15 @@ QWAS/
 |-- include/
 |   |-- drone.h
 |   |-- game.h
+|   |-- stability_assist.h
+|   |-- generated/stability_assist_weights.h
 |   `-- qwas_app.h
 |-- src/
 |   |-- drone.cpp
 |   |-- game.cpp
 |   |-- main.cpp
 |   |-- qwas_app.cpp
+|   |-- stability_assist.cpp
 |   `-- web/
 |       `-- web_main.cpp
 |-- web/

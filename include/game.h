@@ -1,6 +1,7 @@
 #pragma once
 #include "raylib.h"
 #include "drone.h"
+#include "stability_assist.h"
 
 constexpr float CHASE_DIST    = 4.0f;
 constexpr float CHASE_HEIGHT  = 2.0f;
@@ -35,6 +36,8 @@ struct Game {
     bool       draggingSlider;
     int        draggedSettingsIdx;
     int        menuSelectedIdx;
+    bool       easyMode;
+    StabilityAssistMLP stabilityAssist;
     int        endScreenSelectedIdx;  // 0=Retry, 1=Menu on DEAD/WIN screens
     float      touchGuideAlpha;  // fades after the first motor input
     bool       touchGuideDismissed;
@@ -42,7 +45,7 @@ struct Game {
     bool       tapCandidate;
     Vector2    tapStart;
 
-    void Init();
+    void Init(const char* assistWeightsPath = nullptr);
     void Reset();
     void Update(float dt);
     void Draw() const;
@@ -67,5 +70,6 @@ private:
     void CheckGameStatus();
     void DrawWorld() const;
     void DrawOverlay() const;
+    void ApplyEasyMode(const std::array<bool, ROTOR_COUNT>& playerButtons, float dt);
     bool ConsumeCompletedTap();
 };

@@ -1,2 +1,6 @@
 build
 build-web
+__pycache__/
+*.py[cod]
+checkpoints/*_latest.pt
+checkpoints/stability_assist_smoke_*.pt

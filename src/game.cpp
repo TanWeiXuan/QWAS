@@ -1,6 +1,9 @@
 #include "game.h"
 #include "raymath.h"
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 
 namespace {
 constexpr float TOUCH_GUIDE_FADE_SPEED = 1.8f;
@@ -53,7 +56,7 @@ Vector2 GetPrimaryPointerPosition() {
 void DrawRotorTouchZone(RotorID id, const Drone& drone, int screenW, int screenH, const char* label, float alpha) {
     Rectangle zone = GetRotorTouchZone(id, screenW, screenH);
     Color color = drone.rotors[id].color;
-    bool active = drone.rotors[id].thrust > 0.01f;
+    bool active = drone.appliedThrust[id] > 0.01f;
 
     DrawRectangleRec(zone, Fade(color, alpha * (active ? 0.20f : 0.06f)));
     DrawRectangleLinesEx(zone, active ? 4.0f : 2.0f, Fade(color, alpha * (active ? 0.80f : 0.35f)));
@@ -199,7 +202,7 @@ InstructionsLayout GetInstructionsLayout(int screenW, int screenH) {
 //  Lifecycle
 // ---------------------------------------------------------------------------
 
-void Game::Init() {
+void Game::Init(const char* assistWeightsPath) {
     screenWidth  = 1280;
     screenHeight = 720;
 
@@ -226,12 +229,20 @@ void Game::Init() {
     draggingSlider = false;
     draggedSettingsIdx = 0;
     menuSelectedIdx = 0;
+    easyMode = false;
     endScreenSelectedIdx = 0;
     touchGuideAlpha = 1.0f;
     touchGuideDismissed = false;
     tapWasDown = false;
     tapCandidate = false;
     tapStart = {0, 0};
+
+    if (assistWeightsPath) {
+        std::string error;
+        if (!stabilityAssist.LoadFromFile(assistWeightsPath, &error))
+            std::fprintf(stderr, "Warning: could not load Easy Mode weights '%s': %s; using baked weights.\n",
+                         assistWeightsPath, error.c_str());
+    }
 }
 
 void Game::Reset() {
@@ -267,7 +278,7 @@ void Game::Update(float dt) {
 }
 
 void Game::UpdateMenu() {
-    constexpr int MENU_COUNT = 3;
+    constexpr int MENU_COUNT = 4;
     int sw = GetScreenWidth(), sh = GetScreenHeight();
 
     // Keyboard navigation
@@ -319,15 +330,16 @@ void Game::UpdateMenu() {
 void Game::ActivateMenuButton(int idx) {
     switch (idx) {
         case 0: Reset(); endScreenSelectedIdx = 0; state = GameState::PLAYING; break;
-        case 1: settingsSelectedIdx = 0; draggingSlider = false; state = GameState::SETTINGS; break;
-        case 2: state = GameState::INSTRUCTIONS; break;
+        case 1: easyMode = !easyMode; break;
+        case 2: settingsSelectedIdx = 0; draggingSlider = false; state = GameState::SETTINGS; break;
+        case 3: state = GameState::INSTRUCTIONS; break;
     }
 }
 
 void Game::UpdateSettings() {
     auto exitToMenu = [&] {
         draggingSlider = false;
-        menuSelectedIdx = 1;
+        menuSelectedIdx = 2;
         state = GameState::MENU;
     };
 
@@ -389,7 +401,7 @@ void Game::UpdateSettings() {
 
 void Game::UpdateInstructions() {
     if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressed(KEY_ESCAPE)) {
-        menuSelectedIdx = 2;
+        menuSelectedIdx = 3;
         state = GameState::MENU;
         return;
     }
@@ -398,12 +410,12 @@ void Game::UpdateInstructions() {
     Rectangle backRect = GetDialogBackButtonRect(L.bx, L.by, L.bw, L.bh);
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(), backRect)) {
-        menuSelectedIdx = 2;
+        menuSelectedIdx = 3;
         state = GameState::MENU;
         return;
     }
     if (ConsumeCompletedTap() && CheckCollisionPointRec(tapStart, backRect)) {
-        menuSelectedIdx = 2;
+        menuSelectedIdx = 3;
         state = GameState::MENU;
     }
 }
@@ -431,12 +443,83 @@ void Game::UpdatePlaying(float dt) {
     drone.SetRotorInput(ROTOR_REAR_LEFT, rearLeftInput, dt);
     drone.SetRotorInput(ROTOR_REAR_RIGHT, rearRightInput, dt);
 
+    std::array<bool, ROTOR_COUNT> playerButtons = {
+        frontLeftInput, frontRightInput, rearLeftInput, rearRightInput};
+    if (easyMode)
+        ApplyEasyMode(playerButtons, dt);
+    else
+        drone.UsePlayerThrust();
+
     drone.Update(dt);
     UpdateCamera(dt);
     CheckGameStatus();
 
     float progress = fminf(drone.distanceTraveled / fabsf(PAD_WORLD_Z) * 100.0f, 100.0f);
     if (progress > bestScore) bestScore = progress;
+}
+
+void Game::ApplyEasyMode(const std::array<bool, ROTOR_COUNT>& playerButtons, float dt) {
+    constexpr float EASY_MODE_SINK_THRUST_RATIO = 0.95f;
+    constexpr float EASY_MODE_MAX_DIFFERENTIAL_THRUST_RATIO = 0.35f;
+    constexpr float EASY_MODE_STRENGTH = 1.0f;
+
+    float playerTotal = 0.0f;
+    for (float thrust : drone.playerThrust)
+        playerTotal += thrust;
+    float sinkTarget = EASY_MODE_SINK_THRUST_RATIO * DRONE_MASS * GRAVITY;
+    float collectiveTopUp = std::max(0.0f, sinkTarget - playerTotal) / ROTOR_COUNT;
+    for (float thrust : drone.playerThrust)
+        collectiveTopUp = std::min(collectiveTopUp, std::max(0.0f, MAX_THRUST - thrust));
+
+    Vector3 bodyUp = Vector3RotateByQuaternion({0, 1, 0}, drone.orientation);
+    float tiltRadians = std::acos(std::clamp(bodyUp.y, -1.0f, 1.0f));
+    float pitchRollRate = std::sqrt(drone.angularVel.x * drone.angularVel.x +
+                                    drone.angularVel.z * drone.angularVel.z);
+    float gate = ComputeStabilityInterventionGate(tiltRadians, pitchRollRate);
+
+    StabilityAssistMLP::Observation observation{};
+    observation[ASSIST_BODY_UP_X] = bodyUp.x;
+    observation[ASSIST_BODY_UP_Y] = bodyUp.y;
+    observation[ASSIST_BODY_UP_Z] = bodyUp.z;
+    observation[ASSIST_ANGULAR_VELOCITY_X] = drone.angularVel.x;
+    observation[ASSIST_ANGULAR_VELOCITY_Y] = drone.angularVel.y;
+    observation[ASSIST_ANGULAR_VELOCITY_Z] = drone.angularVel.z;
+    for (int i = 0; i < ROTOR_COUNT; ++i) {
+        observation[ASSIST_PLAYER_THRUST_FRONT_LEFT + i] =
+            MAX_THRUST > 0.0f ? drone.playerThrust[i] / MAX_THRUST : 0.0f;
+        observation[ASSIST_BUTTON_FRONT_LEFT + i] = playerButtons[i] ? 1.0f : 0.0f;
+    }
+    observation[ASSIST_FRAME_DT] = dt;
+    observation[ASSIST_INTERVENTION_GATE] = gate;
+    const float physics[] = {DRONE_MASS, GRAVITY, MAX_THRUST, THRUST_RAMP_UP, THRUST_RAMP_DOWN,
+                             ARM_LENGTH, I_PITCH, I_YAW, I_ROLL, LIN_DRAG, ANG_DRAG, K_YAW};
+    for (int i = 0; i < 12; ++i)
+        observation[ASSIST_MASS + i] = physics[i];
+
+    StabilityAssistMLP::Action rawAction = stabilityAssist.Forward(observation);
+    constexpr float pitchMode[ROTOR_COUNT] = {1.0f, 1.0f, -1.0f, -1.0f};
+    constexpr float rollMode[ROTOR_COUNT] = {-1.0f, 1.0f, -1.0f, 1.0f};
+    float pitchComponent = 0.0f;
+    float rollComponent = 0.0f;
+    for (int i = 0; i < ROTOR_COUNT; ++i) {
+        pitchComponent += rawAction[i] * pitchMode[i] * 0.25f;
+        rollComponent += rawAction[i] * rollMode[i] * 0.25f;
+    }
+
+    std::array<float, ROTOR_COUNT> correction{};
+    float feasibilityScale = 1.0f;
+    float assistScale = EASY_MODE_MAX_DIFFERENTIAL_THRUST_RATIO * MAX_THRUST * EASY_MODE_STRENGTH * gate;
+    for (int i = 0; i < ROTOR_COUNT; ++i) {
+        drone.appliedThrust[i] = drone.playerThrust[i] + collectiveTopUp;
+        correction[i] = (pitchComponent * pitchMode[i] + rollComponent * rollMode[i]) * assistScale;
+        if (correction[i] > 0.0f)
+            feasibilityScale = std::min(feasibilityScale, (MAX_THRUST - drone.appliedThrust[i]) / correction[i]);
+        else if (correction[i] < 0.0f)
+            feasibilityScale = std::min(feasibilityScale, drone.appliedThrust[i] / -correction[i]);
+    }
+    feasibilityScale = std::clamp(feasibilityScale, 0.0f, 1.0f);
+    for (int i = 0; i < ROTOR_COUNT; ++i)
+        drone.appliedThrust[i] = std::clamp(drone.appliedThrust[i] + feasibilityScale * correction[i], 0.0f, MAX_THRUST);
 }
 
 void Game::UpdateDead(float dt) {
@@ -764,8 +847,8 @@ void Game::DrawMenu() const {
     DrawText(sub, (sw - stw) / 2, ty + titleSize + 12, subSize, {180, 180, 180, 255});
 
     // Menu buttons
-    const char* labels[] = {"START", "SETTINGS", "INSTRUCTIONS"};
-    for (int i = 0; i < 3; i++)
+    const char* labels[] = {"START", easyMode ? "EASY MODE: ON" : "EASY MODE: OFF", "SETTINGS", "INSTRUCTIONS"};
+    for (int i = 0; i < 4; i++)
         DrawMenuButton(labels[i], GetMenuButtonRect(i, sw, sh), i == menuSelectedIdx);
 
     DrawCenteredText("Arrow keys to navigate  |  Enter or click to select",
@@ -784,6 +867,9 @@ void Game::DrawPlaying() const {
     }
 
     drone.DrawHUDBars(w, h);
+
+    if (easyMode)
+        DrawText("EASY MODE", 16, 16, 18, Fade(LIME, 0.85f));
 
     // Stats (top-center, clear of the corner touch zones)
     int sx = (w - 210) / 2, sy = 16;

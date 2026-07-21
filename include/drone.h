@@ -1,4 +1,6 @@
 #pragma once
+#include <array>
+
 #include "raylib.h"
 #include "raymath.h"
 
@@ -42,7 +44,6 @@ constexpr int ROTOR_COUNT = 4;
 enum RotorID { ROTOR_FRONT_LEFT = 0, ROTOR_FRONT_RIGHT = 1, ROTOR_REAR_LEFT = 2, ROTOR_REAR_RIGHT = 3 };
 
 struct Rotor {
-    float   thrust;     // current thrust [0, MAX_THRUST] N
     float   spinAngle;  // accumulated radians (animation only)
     Vector3 localPos;   // offset from drone center in body frame
     Color   color;      // Q=RED, W=BLUE, A=GREEN, S=YELLOW
@@ -54,11 +55,14 @@ struct Drone {
     Quaternion orientation;  // body-from-world; init = QuaternionIdentity
     Vector3    angularVel;   // body frame rad/s
     Rotor      rotors[ROTOR_COUNT];
+    std::array<float, ROTOR_COUNT> playerThrust;  // persistent result of player input ramping
+    std::array<float, ROTOR_COUNT> appliedThrust; // final thrust used by physics, rendering, and HUD
     bool       alive;
     float      distanceTraveled;  // max forward (-Z) distance reached
 
     void Init(Vector3 spawnPos);
     void SetRotorInput(RotorID id, bool keyDown, float dt);
+    void UsePlayerThrust();
     void Update(float dt);
 
     // 3D rendering — call inside BeginMode3D/EndMode3D

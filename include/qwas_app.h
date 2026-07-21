@@ -4,7 +4,7 @@
 
 class QwasApp {
 public:
-    void Init();
+    void Init(const char* assistWeightsPath = nullptr);
     void Frame();
     void Shutdown();
     void SetPaused(bool paused);

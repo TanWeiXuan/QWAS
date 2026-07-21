@@ -8,10 +8,10 @@ constexpr int SCREEN_HEIGHT = 720;
 constexpr float MAX_FRAME_DT = 0.033f;
 }  // namespace
 
-void QwasApp::Init() {
+void QwasApp::Init(const char* assistWeightsPath) {
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "QWAS - Quadrotor With Awkward Strokes");
     SetTargetFPS(60);
-    game.Init();
+    game.Init(assistWeightsPath);
 }
 
 void QwasApp::Frame() {

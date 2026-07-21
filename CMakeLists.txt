@@ -27,6 +27,8 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include(CTest)
+
 include(FetchContent)
 
 if(QWAS_BUILD_WEB)
@@ -47,10 +49,22 @@ add_library(qwas_game
     src/drone.cpp
     src/game.cpp
     src/qwas_app.cpp
+    src/stability_assist.cpp
 )
 
 target_include_directories(qwas_game PUBLIC include)
 target_link_libraries(qwas_game PUBLIC raylib)
+
+if(BUILD_TESTING AND QWAS_BUILD_NATIVE)
+    add_executable(stability_assist_test tests/stability_assist_test.cpp)
+    target_link_libraries(stability_assist_test PRIVATE qwas_game)
+    add_test(NAME stability_assist_parity
+        COMMAND stability_assist_test
+            "${CMAKE_CURRENT_LIST_DIR}/models/stability_assist.qwasmlp"
+            "${CMAKE_CURRENT_LIST_DIR}/tests/data/stability_assist_parity.txt"
+            "${CMAKE_CURRENT_LIST_DIR}/tests/data/physics_parity.txt"
+            "${CMAKE_CURRENT_BINARY_DIR}/stability_assist_test_scratch")
+endif()
 
 if(QWAS_BUILD_NATIVE)
     add_executable(QWAS

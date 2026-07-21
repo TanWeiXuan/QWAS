@@ -19,7 +19,8 @@ void Drone::Init(Vector3 spawnPos) {
     };
 
     for (int i = 0; i < ROTOR_COUNT; i++) {
-        rotors[i].thrust    = 0;
+        playerThrust[i]     = 0.0f;
+        appliedThrust[i]    = 0.0f;
         rotors[i].spinAngle = 0;
         rotors[i].localPos  = localPositions[i];
         rotors[i].color     = colors[i];
@@ -27,11 +28,15 @@ void Drone::Init(Vector3 spawnPos) {
 }
 
 void Drone::SetRotorInput(RotorID id, bool keyDown, float dt) {
-    float& T = rotors[id].thrust;
+    float& T = playerThrust[id];
     if (keyDown)
         T = fminf(T + THRUST_RAMP_UP * dt, MAX_THRUST);
     else
         T = fmaxf(T - THRUST_RAMP_DOWN * dt, 0.0f);
+}
+
+void Drone::UsePlayerThrust() {
+    appliedThrust = playerThrust;
 }
 
 void Drone::Update(float dt) {
@@ -42,7 +47,7 @@ void Drone::Update(float dt) {
     float totalThrust = 0;
 
     for (int i = 0; i < ROTOR_COUNT; i++) {
-        const float T  = rotors[i].thrust;
+        const float T  = appliedThrust[i];
         const float rx = rotors[i].localPos.x;
         const float rz = rotors[i].localPos.z;
         tauX += -rz * T;
@@ -51,8 +56,8 @@ void Drone::Update(float dt) {
     }
 
     // Reactive yaw: Q,S spin CW; W,A spin CCW (opposite diagonals)
-    float tauY = K_YAW * (rotors[ROTOR_FRONT_LEFT].thrust + rotors[ROTOR_REAR_RIGHT].thrust
-                         - rotors[ROTOR_FRONT_RIGHT].thrust - rotors[ROTOR_REAR_LEFT].thrust);
+    float tauY = K_YAW * (appliedThrust[ROTOR_FRONT_LEFT] + appliedThrust[ROTOR_REAR_RIGHT]
+                         - appliedThrust[ROTOR_FRONT_RIGHT] - appliedThrust[ROTOR_REAR_LEFT]);
 
     // --- Angular acceleration and velocity (body frame) ---
     angularVel.x += (tauX / I_PITCH) * dt;
@@ -100,7 +105,7 @@ void Drone::Update(float dt) {
 
     // --- Spin animation & distance tracking ---
     for (int i = 0; i < ROTOR_COUNT; i++)
-        rotors[i].spinAngle += (rotors[i].thrust / MAX_THRUST) * 30.0f * dt;
+        rotors[i].spinAngle += (appliedThrust[i] / MAX_THRUST) * 30.0f * dt;
 
     float fwdDist = -position.z;
     if (fwdDist > distanceTraveled)
@@ -155,7 +160,7 @@ void Drone::Draw() const {
     BeginBlendMode(BLEND_ALPHA);
     for (int i = 0; i < ROTOR_COUNT; i++) {
         const Rotor& r   = rotors[i];
-        float discR      = 0.10f + 0.10f * (r.thrust / MAX_THRUST);
+        float discR      = 0.10f + 0.10f * (appliedThrust[i] / MAX_THRUST);
         Vector3 discBot  = {r.localPos.x, r.localPos.y - 0.005f, r.localPos.z};
         Vector3 discTop  = {r.localPos.x, r.localPos.y + 0.005f, r.localPos.z};
         DrawCylinderEx(discBot, discTop, discR, discR, 16, Fade(r.color, 0.40f));
@@ -165,7 +170,7 @@ void Drone::Draw() const {
     // Spinner lines (rotate in rotor plane around motor's local Y axis)
     for (int i = 0; i < ROTOR_COUNT; i++) {
         const Rotor& r = rotors[i];
-        float discR    = 0.10f + 0.10f * (r.thrust / MAX_THRUST);
+        float discR    = 0.10f + 0.10f * (appliedThrust[i] / MAX_THRUST);
         float cx = r.localPos.x, cy = r.localPos.y, cz = r.localPos.z;
         float ca = cosf(r.spinAngle), sa = sinf(r.spinAngle);
         Vector3 p1 = {cx + discR * ca, cy, cz + discR * sa};
@@ -192,7 +197,7 @@ void Drone::DrawHUDBars(int screenW, int screenH) const {
         DrawRectangle(x, yBar, barW, barH, {30, 30, 30, 200});
         DrawRectangleLines(x, yBar, barW, barH, DARKGRAY);
 
-        int fillH = (int)(barH * rotors[i].thrust / MAX_THRUST);
+        int fillH = (int)(barH * appliedThrust[i] / MAX_THRUST);
         if (fillH > 0)
             DrawRectangle(x, yBar + barH - fillH, barW, fillH, rotors[i].color);
 
