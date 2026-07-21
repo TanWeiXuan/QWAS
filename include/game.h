@@ -38,6 +38,7 @@ struct Game {
     int        menuSelectedIdx;
     bool       easyMode;
     StabilityAssistMLP stabilityAssist;
+    StabilityAssistController stabilityController;
     int        endScreenSelectedIdx;  // 0=Retry, 1=Menu on DEAD/WIN screens
     float      touchGuideAlpha;  // fades after the first motor input
     bool       touchGuideDismissed;
@@ -70,6 +71,5 @@ private:
     void CheckGameStatus();
     void DrawWorld() const;
     void DrawOverlay() const;
-    void ApplyEasyMode(const std::array<bool, ROTOR_COUNT>& playerButtons, float dt);
     bool ConsumeCompletedTap();
 };

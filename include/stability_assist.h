@@ -3,9 +3,23 @@
 #include <array>
 #include <string>
 
-constexpr int STABILITY_ASSIST_OBSERVATION_SIZE = 28;
+struct Drone;
+
+constexpr int STABILITY_ASSIST_OBSERVATION_SIZE = 32;
 constexpr int STABILITY_ASSIST_HIDDEN_SIZE = 32;
-constexpr int STABILITY_ASSIST_ACTION_SIZE = 4;
+constexpr int STABILITY_ASSIST_ACTION_SIZE = 2;
+
+inline constexpr float EASY_MODE_SINK_THRUST_RATIO = 0.95f;
+inline constexpr float EASY_MODE_RELEASE_BLEND_START = 0.04f;
+inline constexpr float EASY_MODE_RELEASE_BLEND_FULL = 0.20f;
+inline constexpr float EASY_MODE_RELEASE_DIFFERENTIAL_TIME_CONSTANT = 0.14f;
+inline constexpr float EASY_MODE_ACTIVE_DIFFERENTIAL_THRUST_RATIO = 0.30f;
+inline constexpr float EASY_MODE_RELEASE_DIFFERENTIAL_THRUST_RATIO = 0.50f;
+inline constexpr float EASY_MODE_RELEASE_PITCH_KP = 1.80f;
+inline constexpr float EASY_MODE_RELEASE_PITCH_KD = 0.70f;
+inline constexpr float EASY_MODE_RELEASE_ROLL_KP = 1.80f;
+inline constexpr float EASY_MODE_RELEASE_ROLL_KD = 0.70f;
+inline constexpr float EASY_MODE_RELEASE_RESIDUAL_SCALE = 0.20f;
 
 // Canonical deployment observation order. tools/stability_assist/spec.py is
 // mechanically checked against these values by the Python test suite.
@@ -38,6 +52,10 @@ enum StabilityAssistObservationIndex {
     ASSIST_LINEAR_DRAG = 25,
     ASSIST_ANGULAR_DRAG = 26,
     ASSIST_YAW_COEFFICIENT = 27,
+    ASSIST_RELEASE_BLEND = 28,
+    ASSIST_TIME_SINCE_PLAYER_INPUT = 29,
+    ASSIST_PREVIOUS_PITCH_RESIDUAL = 30,
+    ASSIST_PREVIOUS_ROLL_RESIDUAL = 31,
 };
 
 // Raw observation order is documented in doc/stability_assist.md. Forward()
@@ -63,4 +81,47 @@ private:
     std::array<float, STABILITY_ASSIST_ACTION_SIZE> bias3_{};
 };
 
-float ComputeStabilityInterventionGate(float tiltRadians, float pitchRollRate);
+struct StabilityAssistTelemetry {
+    float releaseBlend = 0.0f;
+    float dangerGate = 0.0f;
+    float releaseRecoveryGate = 0.0f;
+    float effectiveGate = 0.0f;
+    float pitchPD = 0.0f;
+    float rollPD = 0.0f;
+    float pitchResidual = 0.0f;
+    float rollResidual = 0.0f;
+    float pitchCommand = 0.0f;
+    float rollCommand = 0.0f;
+    float assistMagnitude = 0.0f;
+    bool pdSaturated = false;
+};
+
+class StabilityAssistController {
+public:
+    void Reset();
+    StabilityAssistTelemetry Apply(
+        Drone& drone,
+        const std::array<bool, 4>& playerButtons,
+        float dt,
+        const StabilityAssistMLP& model);
+
+    float TimeSincePlayerInput() const { return timeSincePlayerInput_; }
+    float ReleaseBlend() const { return releaseBlend_; }
+    std::array<float, 2> PreviousResidual() const {
+        return {previousPitchResidual_, previousRollResidual_};
+    }
+
+private:
+    float timeSincePlayerInput_ = 0.0f;
+    float releaseBlend_ = 0.0f;
+    float previousPitchResidual_ = 0.0f;
+    float previousRollResidual_ = 0.0f;
+};
+
+float ComputeStabilityDangerGate(float tiltRadians, float pitchRollRate);
+float ComputeStabilityReleaseRecoveryGate(float tiltRadians, float pitchRollRate);
+float ComputeStabilityReleaseBlend(float timeSincePlayerInput);
+std::array<float, 2> ComputeStabilityReleasePD(
+    float bodyUpX, float bodyUpZ, float angularVelocityX, float angularVelocityZ);
+void DecayReleasedPlayerDifferential(
+    std::array<float, 4>& playerThrust, float dt, float releaseBlend);

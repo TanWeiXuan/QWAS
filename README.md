@@ -28,9 +28,9 @@ Crash condition: any rotor hits the ground outside the starting or landing pad.
 
 ## Easy Mode
 
-The main menu includes an optional `EASY MODE` toggle. It is off whenever the application starts and is preserved only across retries in that application session. Easy Mode keeps the player in control: it adds a below-hover sink top-up plus bounded pitch/roll stabilization, never goal navigation, horizontal-position control, or learned collective lift.
+The main menu includes an optional `EASY MODE` toggle. It is off whenever the application starts and is preserved only across retries in that application session. While motor buttons are held, Easy Mode permits ordinary deliberate tilt and only intervenes near danger. After release, it smoothly removes stale player differential thrust and blends into an upright pitch/roll PD controller with a small learned two-axis residual. Its deterministic collective target stays below hover, so a settled no-input drone slowly descends.
 
-The default actor is dependency-free baked C++ data for both native and web builds. Training, evaluation, portable weight export, native development overrides, measured results, and the exact observation/reward specification are documented in [doc/stability_assist.md](doc/stability_assist.md).
+The deployed actor is a dependency-free `32 -> 32 -> 32 -> 2` C++ MLP baked into both native and web builds. It never adds learned collective lift, yaw torque, goal navigation, or horizontal-position control. Training, release evaluation, portable v2 weight export, native overrides, measured results, and the exact observation/reward specification are documented in [doc/stability_assist.md](doc/stability_assist.md).
 
 ## Controls
 
@@ -68,6 +68,8 @@ Optionally load compatible development weights without recompiling (the baked ac
 ```bash
 ./build/QWAS --assist-weights models/stability_assist.qwasmlp
 ```
+
+The portable model format is version 2. Older 28-input/four-output Easy Mode files are rejected with the baked model retained safely.
 
 On Windows with Visual Studio generators, the executable is typically under:
 
@@ -132,7 +134,14 @@ QWAS/
 |       `-- web_main.cpp
 |-- web/
 |   `-- emscripten_shell.html
+|-- models/
+|   `-- stability_assist.qwasmlp
+|-- tests/
+|   |-- stability_assist_test.cpp
+|   `-- data/
 `-- doc/
+    |-- stability_assist.md
+    |-- stability_assist_evaluation.json
     `-- qwas.png
 ```
 

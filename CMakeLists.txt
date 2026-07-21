@@ -63,6 +63,7 @@ if(BUILD_TESTING AND QWAS_BUILD_NATIVE)
             "${CMAKE_CURRENT_LIST_DIR}/models/stability_assist.qwasmlp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/data/stability_assist_parity.txt"
             "${CMAKE_CURRENT_LIST_DIR}/tests/data/physics_parity.txt"
+            "${CMAKE_CURRENT_LIST_DIR}/tests/data/release_parity.txt"
             "${CMAKE_CURRENT_BINARY_DIR}/stability_assist_test_scratch")
 endif()
 

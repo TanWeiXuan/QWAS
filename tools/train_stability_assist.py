@@ -16,6 +16,7 @@ from torch import nn
 from stability_assist.environment import EnvironmentConfig, VectorizedQwasEnv
 from stability_assist.evaluation import evaluate_actor
 from stability_assist.model import ActorCritic
+from stability_assist.spec import ACTION_SIZE, OBSERVATION_SIZE
 from stability_assist.weights import bake_header, write_model
 
 
@@ -44,17 +45,15 @@ PRESETS = {
 
 
 def warm_start_actor(model: ActorCritic, device: torch.device, seed: int, steps: int = 300) -> float:
-    """Place PPO in a pitch/roll damping basin without any navigation signal."""
+    """Warm-start a small residual, not a duplicate of the deterministic release PD."""
     generator = torch.Generator(device=device)
     generator.manual_seed(seed + 91)
     optimizer = torch.optim.Adam(model.actor.parameters(), lr=3.0e-3)
-    pitch_mode = torch.tensor([1.0, 1.0, -1.0, -1.0], device=device)
-    roll_mode = torch.tensor([-1.0, 1.0, -1.0, 1.0], device=device)
     final_loss = 0.0
     model.actor.train()
     for _ in range(steps):
         count = 2_048
-        observation = torch.zeros((count, 28), device=device)
+        observation = torch.zeros((count, OBSERVATION_SIZE), device=device)
         tilt = torch.rand(count, generator=generator, device=device) * torch.deg2rad(torch.tensor(80.0, device=device))
         azimuth = (torch.rand(count, generator=generator, device=device) * 2.0 - 1.0) * torch.pi
         observation[:, 0] = torch.sin(tilt) * torch.cos(azimuth)
@@ -64,11 +63,14 @@ def warm_start_actor(model: ActorCritic, device: torch.device, seed: int, steps:
         observation[:, 6:10] = torch.rand((count, 4), generator=generator, device=device)
         observation[:, 10:14] = (torch.rand((count, 4), generator=generator, device=device) > 0.5).float()
         observation[:, 14] = torch.rand(count, generator=generator, device=device) * 0.55 + 0.75
-        observation[:, 15] = torch.clamp((tilt - 0.35) / 0.70, 0.0, 1.0)
+        observation[:, 15] = torch.clamp((tilt - 0.25) / 0.75, 0.0, 1.0)
         observation[:, 16:28] = torch.rand((count, 12), generator=generator, device=device) * 0.4 + 0.8
-        pitch = -1.5 * observation[:, 2] - 1.5 * observation[:, 3]
-        roll = 1.5 * observation[:, 0] - 1.5 * observation[:, 5]
-        target = torch.tanh(pitch[:, None] * pitch_mode + roll[:, None] * roll_mode)
+        observation[:, 28] = torch.rand(count, generator=generator, device=device)
+        observation[:, 29] = torch.rand(count, generator=generator, device=device)
+        observation[:, 30:32] = torch.rand((count, 2), generator=generator, device=device) * 2.0 - 1.0
+        pitch = -2.0 * observation[:, 2] - 2.0 * observation[:, 3]
+        roll = 2.0 * observation[:, 0] - 2.0 * observation[:, 5]
+        target = 0.20 * torch.tanh(torch.stack((pitch, roll), dim=1))
         prediction = model.actor(observation)
         loss = torch.mean((prediction - target).square())
         optimizer.zero_grad(set_to_none=True)
@@ -129,10 +131,19 @@ def save_checkpoint(path: Path, model: ActorCritic, optimizer: torch.optim.Optim
     }, path)
 
 
-def evaluation_score(metrics: dict) -> tuple[float, float, float]:
+def evaluation_score(metrics: dict) -> tuple[float, ...]:
     agency = 1.0 if metrics["player_agency"]["pass"] else 0.0
-    trained = metrics["trained"]
-    return (agency, trained["mean_survival_time"], -trained["mean_assist_magnitude"])
+    recovery = metrics["release_recovery"]["trained"]
+    random_player = metrics["random_player"]["trained"]
+    return (
+        agency,
+        recovery["recovery_success_rate"],
+        -recovery["median_settling_time_seconds"],
+        -recovery["mean_final_level_error"],
+        -recovery["mean_final_pitch_roll_rate"],
+        random_player["mean_survival_time"],
+        -random_player["mean_assist_magnitude"],
+    )
 
 
 def main() -> int:
@@ -155,6 +166,8 @@ def main() -> int:
 
     environment_config = EnvironmentConfig(episode_seconds=10.0 if args.preset == "train" else 4.0)
     env = VectorizedQwasEnv(config.environments, args.seed, environment_config)
+    env.set_curriculum(0.0)
+    env.reset()
     model = ActorCritic().to(device)
     if not args.resume:
         warm_loss = warm_start_actor(model, device, args.seed)
@@ -169,7 +182,12 @@ def main() -> int:
     best_path = args.output_dir / f"stability_assist_{args.preset}_best.pt"
     if args.resume:
         checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint["model_state"])
+        try:
+            model.load_state_dict(checkpoint["model_state"])
+        except RuntimeError as error:
+            raise RuntimeError(
+                "incompatible checkpoint architecture; v1 checkpoints cannot be migrated to the v2 "
+                "32-input/two-output residual actor") from error
         optimizer.load_state_dict(checkpoint["optimizer_state"])
         transitions = int(checkpoint["transitions"])
         updates = int(checkpoint["updates"])
@@ -209,7 +227,8 @@ def main() -> int:
 
     while transitions < config.total_transitions:
         observations = np.empty((config.rollout_steps, config.environments, observation.shape[1]), dtype=np.float32)
-        actions = np.empty((config.rollout_steps, config.environments, 4), dtype=np.float32)
+        env.set_curriculum(transitions / max(config.total_transitions, 1))
+        actions = np.empty((config.rollout_steps, config.environments, ACTION_SIZE), dtype=np.float32)
         log_probabilities = np.empty((config.rollout_steps, config.environments), dtype=np.float32)
         values = np.empty_like(log_probabilities)
         rewards = np.empty_like(log_probabilities)
@@ -243,7 +262,7 @@ def main() -> int:
         returns = advantages + values
 
         flat_observations = torch.from_numpy(observations.reshape(-1, observations.shape[-1])).to(device)
-        flat_actions = torch.from_numpy(actions.reshape(-1, 4)).to(device)
+        flat_actions = torch.from_numpy(actions.reshape(-1, ACTION_SIZE)).to(device)
         flat_old_log_probabilities = torch.from_numpy(log_probabilities.reshape(-1)).to(device)
         flat_returns = torch.from_numpy(returns.reshape(-1)).to(device)
         flat_old_values = torch.from_numpy(values.reshape(-1)).to(device)
@@ -311,10 +330,15 @@ def main() -> int:
             model.eval()
             metrics = evaluate_actor(model.actor, eval_seeds, device, eval_duration, include_all_modes=True)
             score = evaluation_score(metrics)
-            print(f"Deterministic evaluation: trained survival={metrics['trained']['mean_survival_time']:.3f}s, "
-                  f"no-assist={metrics['no_assist']['mean_survival_time']:.3f}s, "
-                  f"zero-policy={metrics['zero']['mean_survival_time']:.3f}s, "
-                  f"crash rate={metrics['trained']['crash_rate']:.3f}, agency={'pass' if metrics['player_agency']['pass'] else 'fail'}",
+            recovery = metrics["release_recovery"]["trained"]
+            random_player = metrics["random_player"]
+            print(f"Deterministic evaluation: recovery={recovery['recovery_success_rate']:.3f}, "
+                  f"median settle={recovery['median_settling_time_seconds']:.3f}s, "
+                  f"final tilt={recovery['mean_final_tilt_degrees']:.3f}deg, "
+                  f"final rate={recovery['mean_final_pitch_roll_rate']:.3f}, "
+                  f"trained survival={random_player['trained']['mean_survival_time']:.3f}s, "
+                  f"PD-only recovery={metrics['release_recovery']['pd_only']['recovery_success_rate']:.3f}, "
+                  f"agency={'pass' if metrics['player_agency']['pass'] else 'fail'}",
                   flush=True)
             if best_score is None or score > best_score:
                 best_score = score
@@ -322,7 +346,9 @@ def main() -> int:
                 save_checkpoint(best_path, model, optimizer, transitions, updates, best_score,
                                 best_metrics, config, args, env)
                 print(f"New best deterministic checkpoint: {best_path} "
-                      f"(survival={score[1]:.3f}s, agency={'pass' if score[0] else 'fail'})", flush=True)
+                      f"(recovery={recovery['recovery_success_rate']:.3f}, "
+                      f"median settle={recovery['median_settling_time_seconds']:.3f}s, "
+                      f"agency={'pass' if score[0] else 'fail'})", flush=True)
             next_evaluation += evaluation_interval
 
         if transitions >= next_checkpoint:
@@ -336,16 +362,23 @@ def main() -> int:
             mean_survival = float(np.mean([item["survival_time"] for item in completed])) if completed else float("nan")
             crash_rate = float(np.mean([item["crashed"] for item in completed])) if completed else float("nan")
             mean_return = float(np.mean([item["episode_return"] for item in completed])) if completed else float("nan")
+            release_episodes = [item for item in completed if item.get("scenario") == "release"]
+            rollout_recovery = float(np.mean([item.get("settled", False) for item in release_episodes])) if release_episodes else float("nan")
             percent = min(100.0, transitions / config.total_transitions * 100.0)
-            best_survival = best_metrics["trained"]["mean_survival_time"] if best_metrics else float("nan")
+            best_recovery = (best_metrics["release_recovery"]["trained"]["recovery_success_rate"]
+                             if best_metrics else float("nan"))
+            best_settle = (best_metrics["release_recovery"]["trained"]["median_settling_time_seconds"]
+                           if best_metrics else float("nan"))
             print(
                 f"Training progress: {percent:.1f}% | transitions {transitions:,}/{config.total_transitions:,} | "
                 f"updates {updates} | elapsed {elapsed:.1f}s | rollout survival {mean_survival:.3f}s | "
-                f"rollout crash {crash_rate:.3f} | mean episode reward {mean_return:.3f} | "
+                f"rollout crash {crash_rate:.3f} | rollout release settled {rollout_recovery:.3f} | "
+                f"mean episode reward {mean_return:.3f} | "
                 f"policy loss {last_ppo_metrics['policy_loss']:.4f} | value loss {last_ppo_metrics['value_loss']:.4f} | "
                 f"entropy {last_ppo_metrics['entropy']:.4f} | KL {last_ppo_metrics['approximate_kl']:.5f} | "
                 f"clip {last_ppo_metrics['clip_fraction']:.3f} | explained variance {last_ppo_metrics['explained_variance']:.3f} | "
-                f"lr {config.learning_rate:g} | best eval survival {best_survival:.3f}s",
+                f"lr {config.learning_rate:g} | best recovery {best_recovery:.3f} | "
+                f"best median settle {best_settle:.3f}s",
                 flush=True,
             )
             while next_progress <= transitions:
@@ -362,10 +395,14 @@ def main() -> int:
     print(f"Total transitions: {transitions:,}; PPO updates: {updates}; elapsed: {elapsed:.1f}s", flush=True)
     print(f"Best checkpoint: {best_path}", flush=True)
     if best_metrics:
-        print(f"Best evaluation mean survival: {best_metrics['trained']['mean_survival_time']:.3f}s; "
-              f"no-assist: {best_metrics['no_assist']['mean_survival_time']:.3f}s; "
-              f"crash-rate reduction: {best_metrics['no_assist']['crash_rate'] - best_metrics['trained']['crash_rate']:.3f}; "
-              f"mean assist: {best_metrics['trained']['mean_assist_magnitude']:.4f}; "
+        recovery = best_metrics["release_recovery"]["trained"]
+        random_player = best_metrics["random_player"]
+        print(f"Best release recovery: {recovery['recovery_success_rate']:.3f}; "
+              f"median settle: {recovery['median_settling_time_seconds']:.3f}s; "
+              f"final tilt: {recovery['mean_final_tilt_degrees']:.3f}deg; "
+              f"random-player survival: {random_player['trained']['mean_survival_time']:.3f}s; "
+              f"no-assist: {random_player['no_assist']['mean_survival_time']:.3f}s; "
+              f"mean assist: {random_player['trained']['mean_assist_magnitude']:.4f}; "
               f"player agency: {'pass' if best_metrics['player_agency']['pass'] else 'fail'}", flush=True)
 
     if not args.no_auto_export:

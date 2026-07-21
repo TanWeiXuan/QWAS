@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Iterable
 
 import numpy as np
+import torch
 
 from .model import Actor
 from .spec import ACTION_SIZE, ARCHITECTURE, HIDDEN_SIZE, OBSERVATION_SCALE, OBSERVATION_SIZE
 
 MAGIC = b"QWASMLP\0"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 HEADER = struct.Struct("<8s5I")
 FLOAT_COUNT = OBSERVATION_SIZE + OBSERVATION_SIZE * HIDDEN_SIZE + HIDDEN_SIZE + HIDDEN_SIZE * HIDDEN_SIZE + HIDDEN_SIZE + HIDDEN_SIZE * ACTION_SIZE + ACTION_SIZE
 FILE_SIZE = HEADER.size + FLOAT_COUNT * 4
@@ -39,13 +40,15 @@ def write_model(actor: Actor, path: str | Path) -> Path:
 
 def read_model(path: str | Path) -> dict[str, np.ndarray]:
     data = Path(path).read_bytes()
-    if len(data) != FILE_SIZE:
+    if len(data) < HEADER.size:
         raise ValueError(f"unexpected file length: {len(data)} (expected {FILE_SIZE})")
     magic, version, input_size, hidden1, hidden2, output_size = HEADER.unpack_from(data)
     if magic != MAGIC:
         raise ValueError("invalid magic bytes")
     if version != FORMAT_VERSION:
         raise ValueError(f"unsupported format version: {version}")
+    if len(data) != FILE_SIZE:
+        raise ValueError(f"unexpected file length: {len(data)} (expected {FILE_SIZE})")
     if (input_size, hidden1, hidden2, output_size) != ARCHITECTURE:
         raise ValueError("unexpected model dimensions")
     floats = np.frombuffer(data, dtype="<f4", offset=HEADER.size)
@@ -81,6 +84,19 @@ def numpy_forward(model: dict[str, np.ndarray], raw_observation: np.ndarray) -> 
     hidden1 = np.tanh(observation @ model["weights1"].T + model["bias1"])
     hidden2 = np.tanh(hidden1 @ model["weights2"].T + model["bias2"])
     return np.tanh(hidden2 @ model["weights3"].T + model["bias3"]).astype(np.float32)
+
+
+def load_actor(path: str | Path) -> Actor:
+    """Reconstruct a PyTorch actor from a portable model for evaluation."""
+    model = read_model(path)
+    actor = Actor()
+    linear = [module for module in actor.layers if hasattr(module, "weight")]
+    with torch.no_grad():
+        for layer, weight_name, bias_name in zip(
+                linear, ("weights1", "weights2", "weights3"), ("bias1", "bias2", "bias3")):
+            layer.weight.copy_(torch.from_numpy(model[weight_name]))
+            layer.bias.copy_(torch.from_numpy(model[bias_name]))
+    return actor
 
 
 def _format_array(name: str, array: np.ndarray) -> str:

@@ -236,6 +236,7 @@ void Game::Init(const char* assistWeightsPath) {
     tapWasDown = false;
     tapCandidate = false;
     tapStart = {0, 0};
+    stabilityController.Reset();
 
     if (assistWeightsPath) {
         std::string error;
@@ -255,6 +256,7 @@ void Game::Reset() {
     tapWasDown = false;
     tapCandidate = false;
     tapStart = {0, 0};
+    stabilityController.Reset();
 
     camera.position = {0, 4, 8};
     camera.target   = {0, DRONE_REST_Y, 0};
@@ -446,7 +448,7 @@ void Game::UpdatePlaying(float dt) {
     std::array<bool, ROTOR_COUNT> playerButtons = {
         frontLeftInput, frontRightInput, rearLeftInput, rearRightInput};
     if (easyMode)
-        ApplyEasyMode(playerButtons, dt);
+        stabilityController.Apply(drone, playerButtons, dt, stabilityAssist);
     else
         drone.UsePlayerThrust();
 
@@ -456,70 +458,6 @@ void Game::UpdatePlaying(float dt) {
 
     float progress = fminf(drone.distanceTraveled / fabsf(PAD_WORLD_Z) * 100.0f, 100.0f);
     if (progress > bestScore) bestScore = progress;
-}
-
-void Game::ApplyEasyMode(const std::array<bool, ROTOR_COUNT>& playerButtons, float dt) {
-    constexpr float EASY_MODE_SINK_THRUST_RATIO = 0.95f;
-    constexpr float EASY_MODE_MAX_DIFFERENTIAL_THRUST_RATIO = 0.35f;
-    constexpr float EASY_MODE_STRENGTH = 1.0f;
-
-    float playerTotal = 0.0f;
-    for (float thrust : drone.playerThrust)
-        playerTotal += thrust;
-    float sinkTarget = EASY_MODE_SINK_THRUST_RATIO * DRONE_MASS * GRAVITY;
-    float collectiveTopUp = std::max(0.0f, sinkTarget - playerTotal) / ROTOR_COUNT;
-    for (float thrust : drone.playerThrust)
-        collectiveTopUp = std::min(collectiveTopUp, std::max(0.0f, MAX_THRUST - thrust));
-
-    Vector3 bodyUp = Vector3RotateByQuaternion({0, 1, 0}, drone.orientation);
-    float tiltRadians = std::acos(std::clamp(bodyUp.y, -1.0f, 1.0f));
-    float pitchRollRate = std::sqrt(drone.angularVel.x * drone.angularVel.x +
-                                    drone.angularVel.z * drone.angularVel.z);
-    float gate = ComputeStabilityInterventionGate(tiltRadians, pitchRollRate);
-
-    StabilityAssistMLP::Observation observation{};
-    observation[ASSIST_BODY_UP_X] = bodyUp.x;
-    observation[ASSIST_BODY_UP_Y] = bodyUp.y;
-    observation[ASSIST_BODY_UP_Z] = bodyUp.z;
-    observation[ASSIST_ANGULAR_VELOCITY_X] = drone.angularVel.x;
-    observation[ASSIST_ANGULAR_VELOCITY_Y] = drone.angularVel.y;
-    observation[ASSIST_ANGULAR_VELOCITY_Z] = drone.angularVel.z;
-    for (int i = 0; i < ROTOR_COUNT; ++i) {
-        observation[ASSIST_PLAYER_THRUST_FRONT_LEFT + i] =
-            MAX_THRUST > 0.0f ? drone.playerThrust[i] / MAX_THRUST : 0.0f;
-        observation[ASSIST_BUTTON_FRONT_LEFT + i] = playerButtons[i] ? 1.0f : 0.0f;
-    }
-    observation[ASSIST_FRAME_DT] = dt;
-    observation[ASSIST_INTERVENTION_GATE] = gate;
-    const float physics[] = {DRONE_MASS, GRAVITY, MAX_THRUST, THRUST_RAMP_UP, THRUST_RAMP_DOWN,
-                             ARM_LENGTH, I_PITCH, I_YAW, I_ROLL, LIN_DRAG, ANG_DRAG, K_YAW};
-    for (int i = 0; i < 12; ++i)
-        observation[ASSIST_MASS + i] = physics[i];
-
-    StabilityAssistMLP::Action rawAction = stabilityAssist.Forward(observation);
-    constexpr float pitchMode[ROTOR_COUNT] = {1.0f, 1.0f, -1.0f, -1.0f};
-    constexpr float rollMode[ROTOR_COUNT] = {-1.0f, 1.0f, -1.0f, 1.0f};
-    float pitchComponent = 0.0f;
-    float rollComponent = 0.0f;
-    for (int i = 0; i < ROTOR_COUNT; ++i) {
-        pitchComponent += rawAction[i] * pitchMode[i] * 0.25f;
-        rollComponent += rawAction[i] * rollMode[i] * 0.25f;
-    }
-
-    std::array<float, ROTOR_COUNT> correction{};
-    float feasibilityScale = 1.0f;
-    float assistScale = EASY_MODE_MAX_DIFFERENTIAL_THRUST_RATIO * MAX_THRUST * EASY_MODE_STRENGTH * gate;
-    for (int i = 0; i < ROTOR_COUNT; ++i) {
-        drone.appliedThrust[i] = drone.playerThrust[i] + collectiveTopUp;
-        correction[i] = (pitchComponent * pitchMode[i] + rollComponent * rollMode[i]) * assistScale;
-        if (correction[i] > 0.0f)
-            feasibilityScale = std::min(feasibilityScale, (MAX_THRUST - drone.appliedThrust[i]) / correction[i]);
-        else if (correction[i] < 0.0f)
-            feasibilityScale = std::min(feasibilityScale, drone.appliedThrust[i] / -correction[i]);
-    }
-    feasibilityScale = std::clamp(feasibilityScale, 0.0f, 1.0f);
-    for (int i = 0; i < ROTOR_COUNT; ++i)
-        drone.appliedThrust[i] = std::clamp(drone.appliedThrust[i] + feasibilityScale * correction[i], 0.0f, MAX_THRUST);
 }
 
 void Game::UpdateDead(float dt) {
